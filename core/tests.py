@@ -1,3 +1,5 @@
+from django.contrib.admin.sites import site as admin_site
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError, transaction
@@ -225,3 +227,169 @@ class ClosureModelTests(TestCase):
 
         with self.assertRaises(ProtectedError):
             self.report.delete()
+
+
+class AdminRegistrationTests(TestCase):
+    def test_site_and_assignee_are_registered(self):
+        self.assertIn(Site, admin_site._registry)
+        self.assertIn(Assignee, admin_site._registry)
+
+    def test_assignee_admin_uses_filter_horizontal_for_sites(self):
+        assignee_admin = admin_site._registry[Assignee]
+
+        self.assertIn("sites", assignee_admin.filter_horizontal)
+
+
+class AdminSiteViewTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.admin_user = User.objects.create_superuser(
+            username="admin", email="admin@example.com", password="password123"
+        )
+        self.client.force_login(self.admin_user)
+
+    def test_index_lists_site_and_assignee_under_core_app(self):
+        response = self.client.get(reverse("admin:index"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Sites")
+        self.assertContains(response, "Assignees")
+
+    def test_site_changelist_shows_name_and_linked_assignees_columns(self):
+        Site.objects.create(name="North Yard")
+
+        response = self.client.get(reverse("admin:core_site_changelist"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Name")
+        self.assertContains(response, "Linked Assignees")
+
+    def test_site_changelist_shows_dash_when_no_assignees(self):
+        Site.objects.create(name="Empty Site")
+
+        response = self.client.get(reverse("admin:core_site_changelist"))
+
+        self.assertContains(response, "—")
+
+    def test_site_changelist_shows_comma_separated_assignee_names(self):
+        site = Site.objects.create(name="North Yard")
+        assignee_a = Assignee.objects.create(name="Jane Doe", email="jane@example.com")
+        assignee_b = Assignee.objects.create(name="John Doe", email="john@example.com")
+        site.assignees.add(assignee_a, assignee_b)
+
+        response = self.client.get(reverse("admin:core_site_changelist"))
+
+        self.assertContains(response, "Jane Doe, John Doe")
+
+    def test_assignee_changelist_shows_name_email_and_linked_sites_columns(self):
+        Assignee.objects.create(name="Jane Doe", email="jane@example.com")
+
+        response = self.client.get(reverse("admin:core_assignee_changelist"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Name")
+        self.assertContains(response, "Email")
+        self.assertContains(response, "Linked Sites")
+
+    def test_assignee_changelist_shows_dash_when_no_sites(self):
+        Assignee.objects.create(name="Jane Doe", email="jane@example.com")
+
+        response = self.client.get(reverse("admin:core_assignee_changelist"))
+
+        self.assertContains(response, "—")
+
+    def test_assignee_changelist_shows_comma_separated_site_names(self):
+        assignee = Assignee.objects.create(name="Jane Doe", email="jane@example.com")
+        site_a = Site.objects.create(name="Site A")
+        site_b = Site.objects.create(name="Site B")
+        assignee.sites.add(site_a, site_b)
+
+        response = self.client.get(reverse("admin:core_assignee_changelist"))
+
+        self.assertContains(response, "Site A, Site B")
+
+    def test_assignee_add_form_uses_filter_horizontal_widget_for_sites(self):
+        response = self.client.get(reverse("admin:core_assignee_add"))
+
+        self.assertEqual(response.status_code, 200)
+        # filter_horizontal renders the sites <select> with the
+        # SelectFilter2 "selectfilter" class (horizontal, not stacked).
+        self.assertContains(response, 'class="selectfilter"')
+        self.assertContains(response, "SelectFilter2.js")
+
+    def test_saving_assignee_with_zero_sites_persists(self):
+        response = self.client.post(
+            reverse("admin:core_assignee_add"),
+            data={
+                "name": "Jane Doe",
+                "email": "jane@example.com",
+                "sites": [],
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        assignee = Assignee.objects.get(name="Jane Doe")
+        self.assertEqual(assignee.sites.count(), 0)
+
+    def test_saving_assignee_with_one_site_persists(self):
+        site = Site.objects.create(name="Site A")
+
+        response = self.client.post(
+            reverse("admin:core_assignee_add"),
+            data={
+                "name": "Jane Doe",
+                "email": "jane@example.com",
+                "sites": [site.pk],
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        assignee = Assignee.objects.get(name="Jane Doe")
+        self.assertEqual(list(assignee.sites.all()), [site])
+
+    def test_saving_assignee_with_multiple_sites_persists(self):
+        site_a = Site.objects.create(name="Site A")
+        site_b = Site.objects.create(name="Site B")
+
+        response = self.client.post(
+            reverse("admin:core_assignee_add"),
+            data={
+                "name": "Jane Doe",
+                "email": "jane@example.com",
+                "sites": [site_a.pk, site_b.pk],
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        assignee = Assignee.objects.get(name="Jane Doe")
+        self.assertEqual(assignee.sites.count(), 2)
+        self.assertIn(site_a, assignee.sites.all())
+        self.assertIn(site_b, assignee.sites.all())
+
+    def test_editing_assignee_can_change_site_links(self):
+        assignee = Assignee.objects.create(name="Jane Doe", email="jane@example.com")
+        site_a = Site.objects.create(name="Site A")
+        site_b = Site.objects.create(name="Site B")
+        assignee.sites.add(site_a)
+
+        response = self.client.post(
+            reverse("admin:core_assignee_change", args=[assignee.pk]),
+            data={
+                "name": "Jane Doe",
+                "email": "jane@example.com",
+                "sites": [site_b.pk],
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        assignee.refresh_from_db()
+        self.assertEqual(list(assignee.sites.all()), [site_b])
+
+    def test_saving_site_with_zero_assignees_persists(self):
+        response = self.client.post(
+            reverse("admin:core_site_add"),
+            data={"name": "New Site"},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(Site.objects.filter(name="New Site").exists())
