@@ -18,6 +18,87 @@ class HealthCheckTests(TestCase):
         self.assertEqual(response.json(), {"status": "ok"})
 
 
+class ReportFormViewTests(TestCase):
+    def test_loads_without_auth(self):
+        response = self.client.get(reverse("report-form"))
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_anonymous_checkbox_present(self):
+        response = self.client.get(reverse("report-form"))
+
+        self.assertContains(response, 'id="id_is_anonymous"')
+        self.assertContains(response, 'type="checkbox"')
+
+    def test_assignee_filter_endpoint_referenced(self):
+        response = self.client.get(reverse("report-form"))
+
+        self.assertContains(response, "/api/sites/")
+
+    def test_lists_all_sites_in_dropdown(self):
+        site_a = Site.objects.create(name="Site A")
+        site_b = Site.objects.create(name="Site B")
+
+        response = self.client.get(reverse("report-form"))
+
+        self.assertContains(response, site_a.name)
+        self.assertContains(response, site_b.name)
+
+    def test_prefills_reporter_name_from_query_param(self):
+        response = self.client.get(reverse("report-form"), {"name": "Jane Doe"})
+
+        self.assertContains(response, 'value="Jane Doe"')
+
+    def test_reporter_name_blank_when_not_available(self):
+        response = self.client.get(reverse("report-form"))
+
+        self.assertContains(response, 'id="id_reporter_name"')
+        self.assertNotContains(response, 'name="reporter_name" value="J')
+
+
+class SiteAssigneesEndpointTests(TestCase):
+    def test_returns_only_assignees_linked_to_the_site(self):
+        site = Site.objects.create(name="North Yard")
+        other_site = Site.objects.create(name="South Yard")
+        linked = Assignee.objects.create(name="Jane Doe", email="jane@example.com")
+        unlinked = Assignee.objects.create(name="John Doe", email="john@example.com")
+        site.assignees.add(linked)
+        other_site.assignees.add(unlinked)
+
+        response = self.client.get(
+            reverse("site-assignees", args=[site.pk])
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(len(data["assignees"]), 1)
+        self.assertEqual(data["assignees"][0]["name"], "Jane Doe")
+
+    def test_returns_empty_list_for_site_with_zero_assignees(self):
+        site = Site.objects.create(name="Empty Site")
+
+        response = self.client.get(
+            reverse("site-assignees", args=[site.pk])
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"assignees": []})
+
+    def test_returns_404_for_nonexistent_site(self):
+        response = self.client.get(reverse("site-assignees", args=[999999]))
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_does_not_require_login(self):
+        site = Site.objects.create(name="North Yard")
+
+        response = self.client.get(
+            reverse("site-assignees", args=[site.pk])
+        )
+
+        self.assertNotEqual(response.status_code, 302)
+
+
 class SiteModelTests(TestCase):
     def test_str_returns_name(self):
         site = Site.objects.create(name="North Yard")
