@@ -39,7 +39,16 @@ Django + Postgres monolith. See `_docs/plan.md` for the product spec and
    ```
 
    The app will be available at http://127.0.0.1:8000/, with a health-check
-   endpoint at http://127.0.0.1:8000/health/.
+   endpoint at http://127.0.0.1:8000/health/. Submit a report at
+   `/report/`; the assignee's report-detail link (`/reports/<token>/`)
+   isn't emailed anywhere in dev — it's printed to the `runserver`
+   console output (the default `EMAIL_BACKEND` is Django's console
+   backend), as a line starting `View the report: ...`. The detail and
+   dashboard (`/dashboard/`) pages are gated by an access code — set
+   `DJANGO_ACCESS_CODES` in `.env` to a value of your choosing to use them.
+
+To stop: `Ctrl+C` the dev server, then `docker compose down` to stop and
+remove the Postgres container.
 
 ## Running tests
 
