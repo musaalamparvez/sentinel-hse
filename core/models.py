@@ -21,8 +21,10 @@ class Report(models.Model):
     class Category(models.TextChoices):
         UNSAFE_CONDITION = "unsafe_condition", "Unsafe Condition"
         UNSAFE_ACT = "unsafe_act", "Unsafe Act"
-        NEAR_MISS = "near_miss", "Near Miss"
-        EQUIPMENT_FAILURE = "equipment_failure", "Equipment Failure"
+        SLIP_TRIP_FALL = "slip_trip_fall", "Slip/Trip/Fall"
+        EQUIPMENT = "equipment", "Equipment"
+        CHEMICAL = "chemical", "Chemical"
+        ELECTRICAL = "electrical", "Electrical"
         ENVIRONMENTAL = "environmental", "Environmental"
         OTHER = "other", "Other"
 

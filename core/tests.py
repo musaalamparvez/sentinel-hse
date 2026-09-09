@@ -158,7 +158,7 @@ class ReportModelTests(TestCase):
         kwargs = dict(
             site=self.site,
             assignee=self.assignee,
-            category=Report.Category.NEAR_MISS,
+            category=Report.Category.SLIP_TRIP_FALL,
             description="A forklift nearly collided with a pedestrian.",
             location="Warehouse B, aisle 3",
         )
@@ -173,7 +173,7 @@ class ReportModelTests(TestCase):
     def test_non_other_category_allows_blank_category_other_detail(self):
         report = Report.objects.create(
             **self._base_kwargs(
-                category=Report.Category.EQUIPMENT_FAILURE, category_other_detail=""
+                category=Report.Category.EQUIPMENT, category_other_detail=""
             )
         )
         report.full_clean(exclude=["photo"])
@@ -233,7 +233,7 @@ class ClosureModelTests(TestCase):
         self.report = Report.objects.create(
             site=self.site,
             assignee=self.assignee,
-            category=Report.Category.NEAR_MISS,
+            category=Report.Category.SLIP_TRIP_FALL,
             description="A forklift nearly collided with a pedestrian.",
             location="Warehouse B, aisle 3",
         )
