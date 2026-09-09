@@ -1,6 +1,9 @@
 # HSE issues export (not tracked)
 hse-near-miss-reporting-issues.md
 
+# Session log (not tracked)
+SESSION_LOG.md
+
 # Python
 __pycache__/
 *.py[cod]
