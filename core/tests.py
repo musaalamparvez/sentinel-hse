@@ -7,10 +7,38 @@ from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError, transaction
 from django.db.models.deletion import ProtectedError
-from django.test import TestCase
-from django.urls import reverse
+from django.http import HttpResponse
+from django.test import TestCase, override_settings
+from django.urls import path, reverse
 
+from core.access import SESSION_KEY, has_valid_session, require_access_code
 from core.models import Assignee, Closure, Report, Site
+
+
+# --- test-only URLconf for the access-code gate tests below (#10) ---
+#
+# #8 and #11 (the real views this gate protects) don't exist yet, so
+# there's no production view to point the decorator at. This dummy view
+# and urlpatterns list exist only so AccessCodeGateTests can exercise
+# @require_access_code through the real request/response cycle (session
+# handling, redirects, CSRF) via the Django test client, without
+# inventing a fake production page. It's wired in only when a test
+# below overrides ROOT_URLCONF to this module.
+
+
+def _gate_protected_view(request):
+    return HttpResponse("secret dashboard content")
+
+
+_gate_protected_view = require_access_code(_gate_protected_view)
+
+urlpatterns = [
+    path(
+        "access-code-test-view/",
+        _gate_protected_view,
+        name="access-code-test-view",
+    ),
+]
 
 
 class HealthCheckTests(TestCase):
@@ -761,3 +789,96 @@ class AdminSiteViewTests(TestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertTrue(Site.objects.filter(name="New Site").exists())
+
+
+@override_settings(ROOT_URLCONF=__name__, ACCESS_CODES=["letmein"])
+class AccessCodeGateTests(TestCase):
+    """Exercises @require_access_code (#10) against the dummy view/
+    urlpatterns defined above, via the real Django test client."""
+
+    url = "access-code-test-view"
+
+    def test_missing_code_shows_prompt_not_500(self):
+        response = self.client.get(reverse(self.url))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Access code required")
+        self.assertNotContains(response, "secret dashboard content")
+
+    def test_missing_code_prompt_is_not_flagged_as_an_invalid_attempt(self):
+        response = self.client.get(reverse(self.url))
+
+        self.assertNotContains(response, "isn&#x27;t valid")
+
+    def test_valid_code_via_url_param_grants_access(self):
+        response = self.client.get(reverse(self.url), {"code": "letmein"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "secret dashboard content")
+
+    def test_valid_code_via_post_form_field_redirects_then_grants_access(self):
+        response = self.client.post(reverse(self.url), {"code": "letmein"})
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], reverse(self.url))
+
+        followed = self.client.get(reverse(self.url))
+        self.assertContains(followed, "secret dashboard content")
+
+    def test_valid_code_is_remembered_for_the_session_no_reprompt(self):
+        self.client.post(reverse(self.url), {"code": "letmein"})
+
+        # Two more requests, no code attached either time.
+        first = self.client.get(reverse(self.url))
+        second = self.client.get(reverse(self.url))
+
+        self.assertContains(first, "secret dashboard content")
+        self.assertContains(second, "secret dashboard content")
+
+    def test_valid_code_sets_the_session_flag(self):
+        self.client.post(reverse(self.url), {"code": "letmein"})
+
+        self.assertTrue(self.client.session.get(SESSION_KEY))
+
+    def test_invalid_code_shows_prompt_not_500_or_hardcoded_view(self):
+        response = self.client.post(reverse(self.url), {"code": "wrong-code"})
+
+        self.assertEqual(response.status_code, 403)
+        self.assertContains(response, "Access code required", status_code=403)
+        self.assertNotContains(
+            response, "secret dashboard content", status_code=403
+        )
+
+    def test_invalid_code_does_not_leak_the_valid_code(self):
+        response = self.client.post(reverse(self.url), {"code": "wrong-code"})
+
+        self.assertNotContains(response, "letmein", status_code=403)
+
+    def test_invalid_code_does_not_grant_a_session(self):
+        self.client.post(reverse(self.url), {"code": "wrong-code"})
+
+        self.assertFalse(self.client.session.get(SESSION_KEY))
+
+    def test_repeated_missing_code_requests_do_not_loop_or_error(self):
+        first = self.client.get(reverse(self.url))
+        second = self.client.get(reverse(self.url))
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+
+    @override_settings(ACCESS_CODES=[])
+    def test_no_configured_codes_denies_by_default_rather_than_500(self):
+        response = self.client.post(reverse(self.url), {"code": "letmein"})
+
+        self.assertEqual(response.status_code, 403)
+        self.assertNotContains(
+            response, "secret dashboard content", status_code=403
+        )
+
+    def test_has_valid_session_reflects_session_state_directly(self):
+        request = self.client.get(reverse(self.url)).wsgi_request
+        self.assertFalse(has_valid_session(request))
+
+        self.client.post(reverse(self.url), {"code": "letmein"})
+        request = self.client.get(reverse(self.url)).wsgi_request
+        self.assertTrue(has_valid_session(request))

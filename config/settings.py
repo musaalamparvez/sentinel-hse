@@ -193,3 +193,18 @@ MAILERS = {
 DEFAULT_FROM_EMAIL = os.environ.get(
     "DJANGO_DEFAULT_FROM_EMAIL", "hse-tool@example.com"
 )
+
+
+# Access-code gating (#10)
+# https://docs.djangoproject.com/en/6.1/topics/http/decorators/
+#
+# Gates the supervisor dashboard (#11) and assignee report detail page
+# (#8) without building full user accounts. Valid codes are configured
+# here from an env var only — never hardcoded, never stored in the DB.
+# Comma-separated; blank/whitespace entries are dropped.
+
+ACCESS_CODES = [
+    code.strip()
+    for code in os.environ.get("DJANGO_ACCESS_CODES", "").split(",")
+    if code.strip()
+]
