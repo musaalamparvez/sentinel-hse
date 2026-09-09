@@ -94,19 +94,20 @@
       <select id="id_site" name="site" required>
         <option value="">Select a site&hellip;</option>
         {% for site in sites %}
-          <option value="{{ site.id }}">{{ site.name }}</option>
+          <option value="{{ site.id }}" {% if submitted.site == site.id|stringformat:"s" %}selected{% endif %}>{{ site.name }}</option>
         {% endfor %}
       </select>
+      {% if errors.site %}<div class="error-text">{{ errors.site.0 }}</div>{% endif %}
     </div>
 
     <div class="field checkbox-field">
-      <input type="checkbox" id="id_is_anonymous" name="is_anonymous">
+      <input type="checkbox" id="id_is_anonymous" name="is_anonymous" {% if submitted.is_anonymous %}checked{% endif %}>
       <label for="id_is_anonymous" style="margin-bottom:0;">Report anonymously</label>
     </div>
 
     <div class="field">
       <label for="id_reporter_name">Your name</label>
-      <input type="text" id="id_reporter_name" name="reporter_name" value="{{ reporter_name }}">
+      <input type="text" id="id_reporter_name" name="reporter_name" value="{% if submitted %}{{ submitted.reporter_name }}{% else %}{{ reporter_name }}{% endif %}">
     </div>
 
     <div class="field">
@@ -114,41 +115,47 @@
       <select id="id_category" name="category" required>
         <option value="">Select a category&hellip;</option>
         {% for value, label in categories %}
-          <option value="{{ value }}">{{ label }}</option>
+          <option value="{{ value }}" {% if submitted.category == value %}selected{% endif %}>{{ label }}</option>
         {% endfor %}
       </select>
+      {% if errors.category %}<div class="error-text">{{ errors.category.0 }}</div>{% endif %}
     </div>
 
     <div class="field" id="other-detail-wrap">
       <label for="id_category_other_detail">Please describe the category</label>
-      <input type="text" id="id_category_other_detail" name="category_other_detail">
+      <input type="text" id="id_category_other_detail" name="category_other_detail" value="{{ submitted.category_other_detail }}">
+      {% if errors.category_other_detail %}<div class="error-text">{{ errors.category_other_detail.0 }}</div>{% endif %}
     </div>
 
     <div class="field">
       <label for="id_description">Description</label>
-      <textarea id="id_description" name="description" required></textarea>
+      <textarea id="id_description" name="description" required>{{ submitted.description }}</textarea>
+      {% if errors.description %}<div class="error-text">{{ errors.description.0 }}</div>{% endif %}
     </div>
 
     <div class="field">
       <label for="id_photo">Photo (optional)</label>
       <input type="file" id="id_photo" name="photo" accept="image/jpeg,image/png">
       <div class="error-text" id="photo-error" hidden></div>
+      {% if errors.photo %}<div class="error-text">{{ errors.photo.0 }}</div>{% endif %}
     </div>
 
     <div class="field">
       <label for="id_location">Location</label>
-      <input type="text" id="id_location" name="location" placeholder="e.g. Warehouse B, aisle 3">
+      <input type="text" id="id_location" name="location" placeholder="e.g. Warehouse B, aisle 3" value="{{ submitted.location }}">
       <button type="button" class="secondary" id="use-my-location">Use my location</button>
       <div class="hint-text" id="location-status" hidden></div>
-      <input type="hidden" id="id_location_lat" name="location_lat">
-      <input type="hidden" id="id_location_lng" name="location_lng">
+      <input type="hidden" id="id_location_lat" name="location_lat" value="{{ submitted.location_lat }}">
+      <input type="hidden" id="id_location_lng" name="location_lng" value="{{ submitted.location_lng }}">
+      {% if errors.location %}<div class="error-text">{{ errors.location.0 }}</div>{% endif %}
     </div>
 
     <div class="field">
       <label for="id_assignee">Assignee</label>
-      <select id="id_assignee" name="assignee" disabled required>
+      <select id="id_assignee" name="assignee" {% if not submitted.assignee %}disabled{% endif %} required>
         <option value="">Select a site first&hellip;</option>
       </select>
+      {% if errors.assignee %}<div class="error-text">{{ errors.assignee.0 }}</div>{% endif %}
     </div>
 
     <button type="submit">Submit report</button>
@@ -265,10 +272,7 @@
         assigneeSelect.disabled = disabled;
       }
 
-      siteSelect.addEventListener("change", function () {
-        // Switching Sites always clears any previously selected Assignee.
-        var siteId = siteSelect.value;
-
+      function loadAssignees(siteId, preselectId) {
         if (!siteId) {
           setAssigneePlaceholder("Select a site first…", true);
           return;
@@ -298,6 +302,9 @@
               var option = document.createElement("option");
               option.value = assignee.id;
               option.textContent = assignee.name;
+              if (preselectId && String(assignee.id) === String(preselectId)) {
+                option.selected = true;
+              }
               assigneeSelect.appendChild(option);
             });
 
@@ -306,7 +313,20 @@
           .catch(function () {
             setAssigneePlaceholder("Couldn't load assignees. Try again.", true);
           });
+      }
+
+      siteSelect.addEventListener("change", function () {
+        // Switching Sites always clears any previously selected Assignee.
+        loadAssignees(siteSelect.value, null);
       });
+
+      // On re-render after a validation error, re-populate the assignee
+      // dropdown for the previously selected site and restore its value.
+      var submittedSiteId = "{{ submitted.site|default:'' }}";
+      var submittedAssigneeId = "{{ submitted.assignee|default:'' }}";
+      if (submittedSiteId) {
+        loadAssignees(submittedSiteId, submittedAssigneeId);
+      }
     })();
   </script>
 </body>

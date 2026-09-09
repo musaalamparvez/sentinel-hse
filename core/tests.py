@@ -56,6 +56,230 @@ class ReportFormViewTests(TestCase):
         self.assertNotContains(response, 'name="reporter_name" value="J')
 
 
+class ReportSubmissionTests(TestCase):
+    def setUp(self):
+        self.site = Site.objects.create(name="North Yard")
+        self.other_site = Site.objects.create(name="South Yard")
+        self.assignee = Assignee.objects.create(
+            name="Jane Doe", email="jane@example.com"
+        )
+        self.site.assignees.add(self.assignee)
+        self.unlinked_assignee = Assignee.objects.create(
+            name="John Doe", email="john@example.com"
+        )
+        self.other_site.assignees.add(self.unlinked_assignee)
+
+    def _valid_data(self, **overrides):
+        data = dict(
+            site=str(self.site.pk),
+            is_anonymous="",
+            reporter_name="Alex Reporter",
+            category=Report.Category.SLIP_TRIP_FALL,
+            category_other_detail="",
+            description="A forklift nearly collided with a pedestrian.",
+            location="Warehouse B, aisle 3",
+            location_lat="",
+            location_lng="",
+            assignee=str(self.assignee.pk),
+        )
+        data.update(overrides)
+        return data
+
+    def test_valid_submission_creates_report_and_redirects(self):
+        response = self.client.post(reverse("report-form"), self._valid_data())
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], reverse("report-confirmation"))
+        self.assertEqual(Report.objects.count(), 1)
+
+        report = Report.objects.get()
+        self.assertEqual(report.status, Report.Status.OPEN)
+        self.assertIsNotNone(report.created_at)
+        self.assertEqual(report.site, self.site)
+        self.assertEqual(report.assignee, self.assignee)
+        self.assertEqual(report.description, self._valid_data()["description"])
+
+    def test_confirmation_page_shows_no_report_details(self):
+        self.client.post(reverse("report-form"), self._valid_data())
+
+        response = self.client.get(reverse("report-confirmation"), follow=False)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "submitted")
+        self.assertNotContains(response, "Warehouse B")
+        self.assertNotContains(response, "Alex Reporter")
+
+    def test_valid_submission_with_gps_coordinates_but_no_location_text(self):
+        response = self.client.post(
+            reverse("report-form"),
+            self._valid_data(location="", location_lat="51.5", location_lng="-0.1"),
+        )
+
+        self.assertEqual(response.status_code, 302)
+        report = Report.objects.get()
+        self.assertEqual(report.location, "")
+        self.assertEqual(float(report.location_lat), 51.5)
+        self.assertEqual(float(report.location_lng), -0.1)
+
+    def test_missing_site_rerenders_form_with_error_and_preserves_values(self):
+        response = self.client.post(reverse("report-form"), self._valid_data(site=""))
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Report.objects.count(), 0)
+        self.assertContains(response, "Please select a site", status_code=400)
+        self.assertContains(response, "Alex Reporter", status_code=400)
+
+    def test_missing_category_is_rejected(self):
+        response = self.client.post(
+            reverse("report-form"), self._valid_data(category="")
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Report.objects.count(), 0)
+        self.assertContains(response, "Please select a category", status_code=400)
+
+    def test_missing_description_is_rejected(self):
+        response = self.client.post(
+            reverse("report-form"), self._valid_data(description="   ")
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Report.objects.count(), 0)
+        self.assertContains(response, "Please enter a description", status_code=400)
+
+    def test_missing_assignee_is_rejected(self):
+        response = self.client.post(
+            reverse("report-form"), self._valid_data(assignee="")
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Report.objects.count(), 0)
+        self.assertContains(response, "Please select an assignee", status_code=400)
+
+    def test_category_other_with_blank_detail_is_rejected(self):
+        response = self.client.post(
+            reverse("report-form"),
+            self._valid_data(
+                category=Report.Category.OTHER, category_other_detail=""
+            ),
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Report.objects.count(), 0)
+        self.assertContains(
+            response, "Please describe the category", status_code=400
+        )
+
+    def test_category_other_with_detail_is_accepted(self):
+        response = self.client.post(
+            reverse("report-form"),
+            self._valid_data(
+                category=Report.Category.OTHER,
+                category_other_detail="Something unusual",
+            ),
+        )
+
+        self.assertEqual(response.status_code, 302)
+        report = Report.objects.get()
+        self.assertEqual(report.category_other_detail, "Something unusual")
+
+    def test_non_image_photo_is_rejected(self):
+        bad_file = SimpleUploadedFile(
+            "notes.txt", b"not an image", content_type="text/plain"
+        )
+        response = self.client.post(
+            reverse("report-form"), self._valid_data(photo=bad_file)
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Report.objects.count(), 0)
+        self.assertContains(
+            response, "Please choose a JPEG or PNG image", status_code=400
+        )
+
+    def test_oversized_photo_is_rejected(self):
+        big_file = SimpleUploadedFile(
+            "photo.jpg",
+            b"x" * (10 * 1024 * 1024 + 1),
+            content_type="image/jpeg",
+        )
+        response = self.client.post(
+            reverse("report-form"), self._valid_data(photo=big_file)
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Report.objects.count(), 0)
+        self.assertContains(
+            response, "Photo must be 10MB or smaller", status_code=400
+        )
+
+    def test_valid_photo_is_saved(self):
+        photo = SimpleUploadedFile(
+            "photo.jpg", b"fake-image-bytes", content_type="image/jpeg"
+        )
+        response = self.client.post(
+            reverse("report-form"), self._valid_data(photo=photo)
+        )
+
+        self.assertEqual(response.status_code, 302)
+        report = Report.objects.get()
+        self.assertTrue(report.photo.name)
+        report.photo.delete(save=False)
+
+    def test_anonymous_submission_ignores_tampered_reporter_name(self):
+        response = self.client.post(
+            reverse("report-form"),
+            self._valid_data(is_anonymous="on", reporter_name="Leaked Name"),
+        )
+
+        self.assertEqual(response.status_code, 302)
+        report = Report.objects.get()
+        self.assertTrue(report.is_anonymous)
+        self.assertEqual(report.reporter_name, "")
+
+    def test_assignee_not_linked_to_site_is_rejected(self):
+        response = self.client.post(
+            reverse("report-form"),
+            self._valid_data(
+                site=str(self.site.pk), assignee=str(self.unlinked_assignee.pk)
+            ),
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Report.objects.count(), 0)
+        self.assertContains(
+            response,
+            "Please select an assignee for the selected site",
+            status_code=400,
+        )
+
+    def test_missing_location_and_gps_is_rejected(self):
+        response = self.client.post(
+            reverse("report-form"),
+            self._valid_data(location="", location_lat="", location_lng=""),
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Report.objects.count(), 0)
+        self.assertContains(
+            response,
+            "Please enter a location or use your current location",
+            status_code=400,
+        )
+
+    def test_location_text_without_gps_is_accepted(self):
+        response = self.client.post(
+            reverse("report-form"),
+            self._valid_data(location="Warehouse B", location_lat="", location_lng=""),
+        )
+
+        self.assertEqual(response.status_code, 302)
+        report = Report.objects.get()
+        self.assertEqual(report.location, "Warehouse B")
+        self.assertIsNone(report.location_lat)
+        self.assertIsNone(report.location_lng)
+
+
 class SiteAssigneesEndpointTests(TestCase):
     def test_returns_only_assignees_linked_to_the_site(self):
         site = Site.objects.create(name="North Yard")
