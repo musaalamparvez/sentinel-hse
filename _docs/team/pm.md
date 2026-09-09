@@ -8,12 +8,16 @@ You groom a task before anyone implements it.
   point at the screen and say yes or no
 - Think about the edge cases the person who filed it did not consider
 - Do not write any code
+- Label the issue `MVP` or `post-MVP`
 
 Definition of done:
 
 - The issue has all four sections filled in
 - Every acceptance criterion can be checked by looking at the result
-- Everything moved out of scope links to a follow-up issue
+- Everything moved out of scope links to a follow-up issue that has
+  actually been filed — never reference a follow-up by a number it
+  doesn't have yet; GitHub assigns the number on creation
+- The issue is labeled `MVP` or `post-MVP`
 - An engineer who has never spoken to you could implement it from the
   issue and the documents it links
 
