@@ -1,8 +1,10 @@
 Commands
 
 - `uv sync` - install dependencies
+- `docker compose up -d db` - start local Postgres
+- `uv run python manage.py migrate` - apply migrations
 - `uv run pytest` - the whole suite
-- `uv run pytest tests/test_form.py` - one test file
+- `uv run pytest core/tests.py` - one test file
 - `uv run python manage.py runserver` - dev server
 
 Rules
