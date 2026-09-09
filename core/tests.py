@@ -11,7 +11,7 @@ from django.db import IntegrityError, transaction
 from django.db.models.deletion import ProtectedError
 from django.http import HttpResponse
 from django.test import TestCase, override_settings
-from django.urls import path, reverse
+from django.urls import clear_url_caches, path, reverse
 from django.utils import timezone
 
 from core.access import SESSION_KEY, has_valid_session, require_access_code
@@ -964,6 +964,104 @@ class ClosureModelTests(TestCase):
 
         with self.assertRaises(ProtectedError):
             self.report.delete()
+
+
+class MediaFileServingTests(TestCase):
+    """config/urls.py (#8, #9): an uploaded Report/Closure photo must be
+    retrievable over HTTP at its `.photo.url`, not just present in the DB
+    and on the filesystem — that's what a real browser walkthrough needs.
+    Django only wires up dev-mode media serving when settings.DEBUG is
+    True *at urlconf import time*, so this reloads the urlconf under an
+    overridden DEBUG to exercise the actual wiring in config/urls.py."""
+
+    def setUp(self):
+        self.site = Site.objects.create(name="North Yard")
+        self.assignee = Assignee.objects.create(
+            name="Jane Doe", email="jane@example.com"
+        )
+
+    def _reload_urlconf(self):
+        import config.urls as urls_module
+
+        importlib.reload(urls_module)
+        clear_url_caches()
+        self.addCleanup(self._reload_urlconf_now)
+
+    @staticmethod
+    def _reload_urlconf_now():
+        import config.urls as urls_module
+
+        importlib.reload(urls_module)
+        clear_url_caches()
+
+    @override_settings(DEBUG=True)
+    def test_uploaded_report_photo_is_retrievable_over_http(self):
+        self._reload_urlconf()
+        report = Report.objects.create(
+            site=self.site,
+            assignee=self.assignee,
+            category=Report.Category.SLIP_TRIP_FALL,
+            description="A forklift nearly collided with a pedestrian.",
+            location="Warehouse B, aisle 3",
+            photo=_make_photo(),
+        )
+        self.addCleanup(report.photo.delete, save=False)
+
+        response = self.client.get(report.photo.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.streaming)
+        self.assertEqual(
+            b"".join(response.streaming_content), b"fake-image-bytes"
+        )
+        self.assertEqual(response["Content-Type"], "image/jpeg")
+
+    @override_settings(DEBUG=True)
+    def test_uploaded_closure_photo_is_retrievable_over_http(self):
+        self._reload_urlconf()
+        report = Report.objects.create(
+            site=self.site,
+            assignee=self.assignee,
+            category=Report.Category.SLIP_TRIP_FALL,
+            description="A forklift nearly collided with a pedestrian.",
+            location="Warehouse B, aisle 3",
+        )
+        closure = Closure.objects.create(
+            report=report,
+            note="Guard rail installed and area re-marked.",
+            photo=_make_photo("closure.jpg"),
+            closed_by=self.assignee,
+        )
+        self.addCleanup(closure.photo.delete, save=False)
+
+        response = self.client.get(closure.photo.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.streaming)
+        self.assertEqual(
+            b"".join(response.streaming_content), b"fake-image-bytes"
+        )
+        self.assertEqual(response["Content-Type"], "image/jpeg")
+
+    @override_settings(DEBUG=False)
+    def test_media_is_not_served_when_debug_is_false(self):
+        # Guards against the fix accidentally serving media unconditionally
+        # in production, where a real web server / cloud storage (#15) is
+        # responsible instead.
+        self._reload_urlconf()
+        report = Report.objects.create(
+            site=self.site,
+            assignee=self.assignee,
+            category=Report.Category.SLIP_TRIP_FALL,
+            description="A forklift nearly collided with a pedestrian.",
+            location="Warehouse B, aisle 3",
+            photo=_make_photo(),
+        )
+        self.addCleanup(report.photo.delete, save=False)
+
+        response = self.client.get(report.photo.url)
+
+        self.assertEqual(response.status_code, 404)
 
 
 class AdminRegistrationTests(TestCase):
