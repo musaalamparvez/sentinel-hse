@@ -119,6 +119,17 @@
 
       <dt>Reported at</dt>
       <dd>{{ report.created_at }}</dd>
+
+      {% if report.closure %}
+        <dt>Closed at</dt>
+        <dd>{{ report.closed_at }}</dd>
+
+        <dt>Closure note</dt>
+        <dd>{{ report.closure.note }}</dd>
+
+        <dt>Closure photo</dt>
+        <dd><img class="photo" src="{{ report.closure.photo.url }}" alt="Closure photo"></dd>
+      {% endif %}
     </dl>
 
     {% if report.status == "open" %}
@@ -133,6 +144,10 @@
         <input type="hidden" name="status" value="open">
         <button type="submit">Reopen</button>
       </form>
+    {% endif %}
+
+    {% if report.status != "closed" %}
+      <p><a href="{% url 'report-close' token %}">Close this report</a></p>
     {% endif %}
   </div>
 </body>

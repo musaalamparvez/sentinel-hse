@@ -1,10 +1,12 @@
 from django.core.files.uploadedfile import UploadedFile
+from django.db import IntegrityError, transaction
 from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.utils import timezone
 
 from core import emails
 from core.access import require_access_code
-from core.models import Assignee, Report, Site
+from core.models import Assignee, Closure, Report, Site
 from core.tokens import report_pk_from_token
 
 # Status values an assignee is allowed to set from the report detail
@@ -228,12 +230,82 @@ def report_detail(request, token):
     context = {
         "report": report,
         "status_error": status_error,
+        "token": token,
     }
     return render(
         request,
         "core/report_detail.html",
         context,
         status=400 if status_error else 200,
+    )
+
+
+@require_access_code
+def report_close(request, token):
+    """Closure form for a Report (#9), reached from the report detail
+    page (#8) via the same unguessable token and access-code gate.
+
+    Requires a note and a photo (matching the validation already
+    enforced at the model level, per ClosureModelTests) before a
+    Closure can be created. On success, creates the Closure, sets
+    Report.status = Closed and Report.closed_at = now(), then redirects
+    back to the detail page. A Report that already has a Closure can't
+    be closed again — that's rejected with a clear message rather than
+    letting the one-to-one IntegrityError bubble up.
+    """
+    pk = report_pk_from_token(token)
+    if pk is None:
+        raise Http404("Invalid or tampered report link.")
+    report = get_object_or_404(Report, pk=pk)
+
+    already_closed = hasattr(report, "closure")
+
+    errors = {}
+    submitted = None
+
+    if request.method == "POST" and not already_closed:
+        submitted = request.POST
+        note = submitted.get("note", "").strip()
+        photo = request.FILES.get("photo")
+
+        if not note:
+            errors.setdefault("note", []).append("A closure note is required.")
+        if not photo:
+            errors.setdefault("photo", []).append("A closure photo is required.")
+
+        if not errors:
+            try:
+                with transaction.atomic():
+                    Closure.objects.create(
+                        report=report,
+                        note=note,
+                        photo=photo,
+                        closed_by=report.assignee,
+                    )
+                    report.status = Report.Status.CLOSED
+                    report.closed_at = timezone.now()
+                    report.save(update_fields=["status", "closed_at"])
+            except IntegrityError:
+                # Two concurrent submissions raced past the already_closed
+                # check above; the DB's one-to-one constraint is the
+                # backstop, but the caller still gets a clear message
+                # rather than a raw 500.
+                already_closed = True
+            else:
+                return redirect("report-detail", token=token)
+
+    context = {
+        "report": report,
+        "already_closed": already_closed,
+        "errors": errors,
+        "submitted": submitted,
+        "token": token,
+    }
+    return render(
+        request,
+        "core/report_close.html",
+        context,
+        status=409 if already_closed else (400 if errors else 200),
     )
 
 

@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Close Report</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 1rem;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: #f5f5f5;
+      color: #1a1a1a;
+    }
+    .card {
+      max-width: 480px;
+      margin: 0 auto;
+      background: #fff;
+      border-radius: 8px;
+      padding: 1.5rem;
+    }
+    h1 {
+      font-size: 1.25rem;
+      margin: 0 0 1rem;
+    }
+    label {
+      display: block;
+      font-weight: 600;
+      margin-top: 1rem;
+    }
+    textarea, input[type="file"] {
+      width: 100%;
+      margin-top: 0.35rem;
+      font-size: 1rem;
+      font-family: inherit;
+    }
+    textarea {
+      padding: 0.5rem;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    .error {
+      color: #b00020;
+      font-weight: 600;
+      margin: 0.25rem 0 0;
+    }
+    .notice {
+      color: #b00020;
+      font-weight: 600;
+    }
+    button {
+      margin-top: 1.5rem;
+      font-size: 1rem;
+      padding: 0.6rem 1rem;
+      border: none;
+      border-radius: 4px;
+      background: #1a1a1a;
+      color: #fff;
+      cursor: pointer;
+    }
+    a { color: #1a1a1a; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Close Report #{{ report.pk }}</h1>
+
+    {% if already_closed %}
+      <p class="notice">This report has already been closed.</p>
+      <p><a href="{% url 'report-detail' token %}">Back to report</a></p>
+    {% else %}
+      <form method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+
+        <label for="note">Closure note</label>
+        <textarea id="note" name="note" rows="4">{% if submitted %}{{ submitted.note }}{% endif %}</textarea>
+        {% for message in errors.note %}
+          <p class="error">{{ message }}</p>
+        {% endfor %}
+
+        <label for="photo">Closure photo</label>
+        <input type="file" id="photo" name="photo" accept="image/*">
+        {% for message in errors.photo %}
+          <p class="error">{{ message }}</p>
+        {% endfor %}
+
+        <button type="submit">Close report</button>
+      </form>
+
+      <p><a href="{% url 'report-detail' token %}">Cancel</a></p>
+    {% endif %}
+  </div>
+</body>
+</html>

@@ -20,4 +20,9 @@ urlpatterns = [
         views.report_detail,
         name="report-detail",
     ),
+    path(
+        "reports/<str:token>/close/",
+        views.report_close,
+        name="report-close",
+    ),
 ]

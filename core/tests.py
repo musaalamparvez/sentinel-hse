@@ -10,6 +10,7 @@ from django.db.models.deletion import ProtectedError
 from django.http import HttpResponse
 from django.test import TestCase, override_settings
 from django.urls import path, reverse
+from django.utils import timezone
 
 from core.access import SESSION_KEY, has_valid_session, require_access_code
 from core.models import Assignee, Closure, Report, Site
@@ -595,6 +596,161 @@ class ReportDetailViewTests(TestCase):
         self.assertContains(response, "Access code required")
         self.report.refresh_from_db()
         self.assertEqual(self.report.status, Report.Status.OPEN)
+
+
+@override_settings(ACCESS_CODES=["letmein"])
+class ReportCloseViewTests(TestCase):
+    """core.views.report_close (#9): the closure form linked from the
+    report detail page (#8), gated by the same access code as #8/#10."""
+
+    def setUp(self):
+        self.site = Site.objects.create(name="North Yard")
+        self.assignee = Assignee.objects.create(
+            name="Jane Doe", email="jane@example.com"
+        )
+        self.report = Report.objects.create(
+            site=self.site,
+            assignee=self.assignee,
+            category=Report.Category.SLIP_TRIP_FALL,
+            description="A forklift nearly collided with a pedestrian.",
+            location="Warehouse B, aisle 3",
+            status=Report.Status.OPEN,
+        )
+        self.token = report_token(self.report)
+        self.close_url = reverse("report-close", args=[self.token])
+        self.detail_url = reverse("report-detail", args=[self.token])
+
+    def _login(self):
+        self.client.get(self.detail_url, {"code": "letmein"})
+
+    # --- gating ---
+
+    def test_unauthenticated_request_shows_access_prompt_not_form(self):
+        response = self.client.get(self.close_url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Access code required")
+        self.assertNotContains(response, "Closure note")
+
+    def test_close_link_present_on_open_report_detail_page(self):
+        response = self.client.get(self.detail_url, {"code": "letmein"})
+
+        self.assertContains(response, self.close_url)
+
+    # --- happy path ---
+
+    def test_valid_submission_creates_closure_and_closes_report(self):
+        self._login()
+
+        response = self.client.post(
+            self.close_url,
+            {"note": "Guard rail installed and area re-marked.", "photo": _make_photo()},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.report.refresh_from_db()
+        self.assertEqual(self.report.status, Report.Status.CLOSED)
+        self.assertIsNotNone(self.report.closed_at)
+        closure = Closure.objects.get(report=self.report)
+        self.assertEqual(closure.note, "Guard rail installed and area re-marked.")
+        self.assertEqual(closure.closed_by, self.assignee)
+
+    def test_detail_page_shows_closed_status_and_closure_details_after_closing(self):
+        self._login()
+        self.client.post(
+            self.close_url,
+            {"note": "Guard rail installed.", "photo": _make_photo()},
+        )
+
+        response = self.client.get(self.detail_url)
+
+        self.assertContains(response, "Closed")
+        self.assertContains(response, "Guard rail installed.")
+
+    # --- rejection: missing fields ---
+
+    def test_missing_note_rerenders_with_error_and_persists_nothing(self):
+        self._login()
+
+        response = self.client.post(self.close_url, {"photo": _make_photo()})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertContains(response, "A closure note is required.", status_code=400)
+        self.report.refresh_from_db()
+        self.assertEqual(self.report.status, Report.Status.OPEN)
+        self.assertIsNone(self.report.closed_at)
+        self.assertFalse(Closure.objects.filter(report=self.report).exists())
+
+    def test_missing_photo_rerenders_with_error_and_persists_nothing(self):
+        self._login()
+
+        response = self.client.post(self.close_url, {"note": "Fixed it."})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertContains(response, "A closure photo is required.", status_code=400)
+        self.report.refresh_from_db()
+        self.assertEqual(self.report.status, Report.Status.OPEN)
+        self.assertFalse(Closure.objects.filter(report=self.report).exists())
+
+    def test_missing_both_rerenders_with_both_errors_and_persists_nothing(self):
+        self._login()
+
+        response = self.client.post(self.close_url, {})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertContains(response, "A closure note is required.", status_code=400)
+        self.assertContains(response, "A closure photo is required.", status_code=400)
+        self.report.refresh_from_db()
+        self.assertEqual(self.report.status, Report.Status.OPEN)
+        self.assertFalse(Closure.objects.filter(report=self.report).exists())
+
+    # --- rejection: already closed ---
+
+    def test_closing_an_already_closed_report_is_rejected_with_clear_message(self):
+        self._login()
+        Closure.objects.create(
+            report=self.report,
+            note="Already handled.",
+            photo=_make_photo(),
+            closed_by=self.assignee,
+        )
+        self.report.status = Report.Status.CLOSED
+        self.report.closed_at = timezone.now()
+        self.report.save(update_fields=["status", "closed_at"])
+
+        response = self.client.post(
+            self.close_url,
+            {"note": "Trying again.", "photo": _make_photo()},
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertContains(
+            response, "already been closed", status_code=409
+        )
+        self.assertEqual(Closure.objects.filter(report=self.report).count(), 1)
+        closure = Closure.objects.get(report=self.report)
+        self.assertEqual(closure.note, "Already handled.")
+
+    def test_get_on_already_closed_report_shows_message_not_form(self):
+        self._login()
+        Closure.objects.create(
+            report=self.report,
+            note="Already handled.",
+            photo=_make_photo(),
+            closed_by=self.assignee,
+        )
+
+        response = self.client.get(self.close_url)
+
+        self.assertContains(response, "already been closed", status_code=409)
+        self.assertNotContains(response, "Closure note", status_code=409)
+
+    def test_invalid_token_is_a_404_once_past_the_gate(self):
+        bogus_url = reverse("report-close", args=["not-a-real-token"])
+
+        response = self.client.get(bogus_url, {"code": "letmein"})
+
+        self.assertEqual(response.status_code, 404)
 
 
 class SiteModelTests(TestCase):
