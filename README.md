@@ -56,6 +56,77 @@ uv run python manage.py test
 Tests run against a temporary Postgres test database created/destroyed
 automatically by Django's test runner, using the same `DATABASE_URL`.
 
+## Deploying to production
+
+Deploy config is a plain `Dockerfile` + `Procfile` (#12) — no
+platform-specific config (`heroku.yml`, `railway.json`, `render.yaml`, ...)
+is committed, so this works on any host that can build a Dockerfile and run
+Procfile-style processes (Heroku, Railway, Render, Fly.io, ...) with at
+most minor host-specific glue.
+
+### Required environment variables
+
+| Variable | Purpose |
+| --- | --- |
+| `DJANGO_SECRET_KEY` | Django's `SECRET_KEY`. **Required** in production — generate a unique, random value per environment (e.g. `python -c "import secrets; print(secrets.token_urlsafe(50))"`) and never commit it. |
+| `DJANGO_DEBUG` | Set to `False` in production. Defaults to `True`, so local dev is unaffected if unset. |
+| `DJANGO_ALLOWED_HOSTS` | Comma-separated list of hostnames Django will serve, e.g. `myapp.example.com`. Required whenever `DJANGO_DEBUG=False` (Django rejects requests with an unrecognized `Host` header otherwise). |
+| `DATABASE_URL` | Single Postgres connection string, e.g. `postgres://user:pass@host:5432/dbname`. Most hosts (Heroku, Railway, Render) inject this automatically when you attach a Postgres addon/database. |
+| `DJANGO_EMAIL_BACKEND` / `DJANGO_EMAIL_HOST*` | Optional — SMTP config for outgoing mail (see #7). Defaults to the console backend if unset. |
+| `DJANGO_ACCESS_CODES` | Optional — comma-separated access codes gating the dashboard/report pages (see #10). |
+| `PORT` | The port the app should listen on. Most hosts (Heroku, Railway, Render) set this automatically; the `Procfile`'s `web` process binds to it. |
+
+Copy `.env.example` as a starting point for which variables exist; in
+production these are set via the host's environment/config-vars UI, not a
+committed `.env` file.
+
+### Static files
+
+Static files are served in-process via [whitenoise](https://whitenoise.readthedocs.io/)
+— no separate static file host/CDN is required. The `Dockerfile` runs
+`python manage.py collectstatic --noinput` at build time, so this doesn't
+need to happen again at deploy/runtime.
+
+### Running migrations in production
+
+The `Procfile` declares a `release` process (`python manage.py migrate
+--noinput`) that hosts supporting Heroku-style release phases (Heroku,
+some Railway/Render setups) run automatically before each deploy's `web`
+process starts. On a host without release-phase support, run it manually
+against the new release once, e.g.:
+
+```bash
+docker run --rm -e DATABASE_URL=... -e DJANGO_SECRET_KEY=... <image> \
+  python manage.py migrate --noinput
+```
+
+### Building and running the image locally
+
+To verify the production image works before deploying:
+
+```bash
+docker build -t hse-tool .
+docker run --rm -p 8000:8000 \
+  -e DJANGO_SECRET_KEY=some-random-value \
+  -e DJANGO_DEBUG=False \
+  -e DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1 \
+  -e DATABASE_URL=postgres://hse_tool:hse_tool@host.docker.internal:5432/hse_tool \
+  hse-tool
+```
+
+(`host.docker.internal` lets the container reach the `docker compose up -d
+db` Postgres running on the host — a real deploy points `DATABASE_URL` at
+the host's managed Postgres instead.) Then confirm
+http://127.0.0.1:8000/health/ responds `{"status": "ok"}`.
+
+### Triggering a deploy
+
+How a deploy is actually triggered (git push, CLI, CI pipeline) is
+host-specific and out of scope for this repo's config — see the chosen
+host's docs for connecting it to this `Dockerfile`/`Procfile`. Choosing
+which host to use, and zero-downtime/rollback tooling, are also out of
+scope for now (see #12).
+
 ## Engineering flow / process
 
 Work is organized as GitHub issues, one at a time (see `_docs/process.md`).

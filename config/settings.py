@@ -62,6 +62,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -143,8 +144,33 @@ USE_TZ = True
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
+#
+# Served via whitenoise in all environments (#12) so the app doesn't
+# depend on a separate static file host/CDN for MVP. `collectstatic`
+# populates STATIC_ROOT; whitenoise serves straight from there with
+# hashed, far-future-cached filenames in production.
 
 STATIC_URL = "static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+
+# The manifest storage whitenoise recommends for production requires
+# `collectstatic` to have already run (it looks up a hashed filename
+# for every {% static %} reference via a manifest file). Local dev/test
+# runs don't run collectstatic, so they fall back to plain whitenoise
+# storage which serves files by name straight from STATIC_ROOT/finders
+# with no manifest lookup — keeping `runserver`/tests unaffected.
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": (
+            "whitenoise.storage.CompressedManifestStaticFilesStorage"
+            if not DEBUG
+            else "whitenoise.storage.CompressedStaticFilesStorage"
+        ),
+    },
+}
 
 
 # Media files (user uploads, e.g. Report/Closure photos)

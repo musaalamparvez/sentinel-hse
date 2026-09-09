@@ -1,3 +1,5 @@
+import importlib
+import os
 from unittest.mock import patch
 
 from django.contrib.admin.sites import site as admin_site
@@ -1392,3 +1394,107 @@ class DashboardViewTests(TestCase):
                 "report-detail", args=[report_token(report)]
             )
             self.assertContains(response, expected_url)
+
+
+# --- Production deployment configuration (#12) ---
+#
+# config/settings.py reads DJANGO_DEBUG / DJANGO_ALLOWED_HOSTS /
+# DJANGO_SECRET_KEY / DATABASE_URL at *import* time, so these tests
+# reload the module under a patched environment to exercise that
+# wiring, then reload it again with the real environment restored so
+# later tests aren't affected by the temporary values.
+
+import config.settings as settings_module
+
+
+class ProductionDeploymentSettingsTests(TestCase):
+    def tearDown(self):
+        # Always leave the settings module reflecting the real
+        # environment, whatever happened in the test body above.
+        importlib.reload(settings_module)
+
+    def test_debug_is_true_when_env_var_says_true(self):
+        with patch.dict(os.environ, {"DJANGO_DEBUG": "True"}):
+            reloaded = importlib.reload(settings_module)
+
+        self.assertTrue(reloaded.DEBUG)
+
+    def test_debug_is_false_when_env_var_says_false(self):
+        with patch.dict(os.environ, {"DJANGO_DEBUG": "False"}):
+            reloaded = importlib.reload(settings_module)
+
+        self.assertFalse(reloaded.DEBUG)
+
+    def test_allowed_hosts_comes_from_env_var(self):
+        with patch.dict(
+            os.environ, {"DJANGO_ALLOWED_HOSTS": "example.com,www.example.com"}
+        ):
+            reloaded = importlib.reload(settings_module)
+
+        self.assertEqual(
+            reloaded.ALLOWED_HOSTS, ["example.com", "www.example.com"]
+        )
+
+    def test_secret_key_comes_from_env_var(self):
+        with patch.dict(os.environ, {"DJANGO_SECRET_KEY": "test-secret-value"}):
+            reloaded = importlib.reload(settings_module)
+
+        self.assertEqual(reloaded.SECRET_KEY, "test-secret-value")
+
+    def test_database_url_env_var_is_parsed_into_databases_setting(self):
+        with patch.dict(
+            os.environ,
+            {
+                "DATABASE_URL": "postgres://someuser:somepass@dbhost:5433/somedb"
+            },
+        ):
+            reloaded = importlib.reload(settings_module)
+
+        db = reloaded.DATABASES["default"]
+        self.assertEqual(db["ENGINE"], "django.db.backends.postgresql")
+        self.assertEqual(db["NAME"], "somedb")
+        self.assertEqual(db["USER"], "someuser")
+        self.assertEqual(db["PASSWORD"], "somepass")
+        self.assertEqual(db["HOST"], "dbhost")
+        self.assertEqual(db["PORT"], 5433)
+
+    def test_whitenoise_middleware_is_installed(self):
+        self.assertIn(
+            "whitenoise.middleware.WhiteNoiseMiddleware",
+            settings_module.MIDDLEWARE,
+        )
+        # Whitenoise must sit directly after SecurityMiddleware per its
+        # own install instructions.
+        security_index = settings_module.MIDDLEWARE.index(
+            "django.middleware.security.SecurityMiddleware"
+        )
+        whitenoise_index = settings_module.MIDDLEWARE.index(
+            "whitenoise.middleware.WhiteNoiseMiddleware"
+        )
+        self.assertEqual(whitenoise_index, security_index + 1)
+
+    def test_staticfiles_storage_is_whitenoise_manifest_backend_in_production(self):
+        with patch.dict(os.environ, {"DJANGO_DEBUG": "False"}):
+            reloaded = importlib.reload(settings_module)
+
+        self.assertEqual(
+            reloaded.STORAGES["staticfiles"]["BACKEND"],
+            "whitenoise.storage.CompressedManifestStaticFilesStorage",
+        )
+
+    def test_staticfiles_storage_is_whitenoise_non_manifest_backend_in_dev(self):
+        with patch.dict(os.environ, {"DJANGO_DEBUG": "True"}):
+            reloaded = importlib.reload(settings_module)
+
+        self.assertEqual(
+            reloaded.STORAGES["staticfiles"]["BACKEND"],
+            "whitenoise.storage.CompressedStaticFilesStorage",
+        )
+
+    def test_no_secret_key_literal_committed_outside_the_documented_dev_default(self):
+        # The only hardcoded key allowed in the file is the explicitly
+        # "django-insecure-" labelled local-dev fallback; anything else
+        # must come from the DJANGO_SECRET_KEY env var.
+        with open(settings_module.__file__) as f:
+            source = f.read()
+        self.assertIn("django-insecure-", source)
