@@ -88,3 +88,13 @@ Only the docs relevant to your current role need to be read in full —
 `_docs/testing-guidelines.md` and `_docs/design-system.md` are read
 whenever they apply (tests / UI work), and the PM/QA docs only matter when
 you're grooming or verifying a task rather than implementing it.
+
+For example, the chain for implementing this issue was:
+
+```
+CLAUDE.md → AGENTS.md → _docs/process.md → _docs/team/software-engineer.md
+```
+
+with `_docs/testing-guidelines.md` and `_docs/design-system.md` as
+required-but-empty side branches off `AGENTS.md` (read because the rules
+say to, but both files were empty at the time).
