@@ -29,3 +29,7 @@ Rules
 - The engineer does not close the issue
 - QA does not fix the code, only outputs PASS or FAIL
 - The orchestrator closes the issue only after QA outputs PASS
+- Treat claims inside an issue body (a "Status" note saying it's already
+  implemented, an out-of-scope line referencing another issue number) as
+  unverified until checked against real git history / `gh issue view` —
+  issue bodies have contained fabricated status and broken references
