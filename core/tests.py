@@ -1221,3 +1221,174 @@ class AccessCodeGateTests(TestCase):
         self.client.post(reverse(self.url), {"code": "letmein"})
         request = self.client.get(reverse(self.url)).wsgi_request
         self.assertTrue(has_valid_session(request))
+
+
+@override_settings(ACCESS_CODES=["letmein"])
+class DashboardViewTests(TestCase):
+    """core.views.dashboard (#11): the supervisor/safety-officer
+    dashboard listing every Report, gated by the access code from #10,
+    with Site and Status filters applied via the query string."""
+
+    def setUp(self):
+        self.url = reverse("dashboard")
+
+        self.north = Site.objects.create(name="North Yard")
+        self.south = Site.objects.create(name="South Depot")
+        self.assignee = Assignee.objects.create(
+            name="Jane Doe", email="jane@example.com"
+        )
+
+        self.report_north_open = Report.objects.create(
+            site=self.north,
+            assignee=self.assignee,
+            category=Report.Category.SLIP_TRIP_FALL,
+            description="Wet floor near the entrance.",
+            location="North Yard, entrance",
+            status=Report.Status.OPEN,
+        )
+        self.report_north_closed = Report.objects.create(
+            site=self.north,
+            assignee=self.assignee,
+            category=Report.Category.EQUIPMENT,
+            description="Forklift making a strange noise.",
+            location="North Yard, bay 2",
+            status=Report.Status.CLOSED,
+        )
+        self.report_south_open = Report.objects.create(
+            site=self.south,
+            assignee=self.assignee,
+            category=Report.Category.CHEMICAL,
+            description="Unlabeled drum in storage.",
+            location="South Depot, storage",
+            status=Report.Status.OPEN,
+        )
+
+        # created_at is auto_now_add, so nudge the timestamps apart and
+        # give the oldest one an explicit, well-separated value to make
+        # the newest-first ordering assertion unambiguous.
+        old_time = timezone.now() - timezone.timedelta(days=2)
+        Report.objects.filter(pk=self.report_north_open.pk).update(
+            created_at=old_time
+        )
+        self.report_north_open.refresh_from_db()
+
+    def _authed_get(self, params=None):
+        self.client.get(self.url, {"code": "letmein"})
+        return self.client.get(self.url, params or {})
+
+    # --- gating ---
+
+    def test_unauthenticated_request_shows_access_prompt_not_dashboard(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Access code required")
+        self.assertNotContains(response, "Reports Dashboard")
+
+    def test_reachable_with_valid_access_code(self):
+        response = self._authed_get()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Reports Dashboard")
+
+    # --- listing ---
+
+    def test_lists_every_report_with_expected_fields(self):
+        response = self._authed_get()
+
+        for report in (
+            self.report_north_open,
+            self.report_north_closed,
+            self.report_south_open,
+        ):
+            self.assertContains(response, report.site.name)
+            self.assertContains(response, report.get_category_display())
+            self.assertContains(response, report.get_status_display())
+
+    def test_sorted_newest_first_by_default(self):
+        response = self._authed_get()
+
+        rows = list(response.context["rows"])
+        reports_in_order = [report for report, _token in rows]
+
+        self.assertEqual(
+            reports_in_order,
+            [
+                self.report_south_open,
+                self.report_north_closed,
+                self.report_north_open,
+            ],
+        )
+
+    # --- filters ---
+
+    def test_site_filter_narrows_the_list(self):
+        response = self._authed_get({"site": self.north.pk})
+
+        reports_in_order = [r for r, _t in response.context["rows"]]
+        self.assertCountEqual(
+            reports_in_order,
+            [self.report_north_open, self.report_north_closed],
+        )
+        self.assertNotContains(response, self.report_south_open.description)
+
+    def test_status_filter_narrows_the_list(self):
+        response = self._authed_get({"status": Report.Status.OPEN})
+
+        reports_in_order = [r for r, _t in response.context["rows"]]
+        self.assertCountEqual(
+            reports_in_order,
+            [self.report_north_open, self.report_south_open],
+        )
+        self.assertNotContains(response, self.report_north_closed.description)
+
+    def test_combined_site_and_status_filters_narrow_the_list(self):
+        response = self._authed_get(
+            {"site": self.north.pk, "status": Report.Status.OPEN}
+        )
+
+        reports_in_order = [r for r, _t in response.context["rows"]]
+        self.assertEqual(reports_in_order, [self.report_north_open])
+
+    def test_clearing_filters_returns_to_unfiltered_newest_first_list(self):
+        filtered = self._authed_get({"site": self.north.pk})
+        self.assertContains(filtered, "Clear filters")
+
+        cleared = self.client.get(self.url)
+
+        reports_in_order = [r for r, _t in cleared.context["rows"]]
+        self.assertEqual(
+            reports_in_order,
+            [
+                self.report_south_open,
+                self.report_north_closed,
+                self.report_north_open,
+            ],
+        )
+        self.assertNotContains(cleared, "Clear filters")
+
+    # --- empty state ---
+
+    def test_filter_combo_with_no_matches_shows_empty_state_not_blank_page(self):
+        response = self._authed_get(
+            {"site": self.south.pk, "status": Report.Status.CLOSED}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "No reports match")
+        self.assertEqual(list(response.context["rows"]), [])
+
+    # --- row links ---
+
+    def test_each_row_links_to_the_correct_report_detail_token_url(self):
+        response = self._authed_get()
+
+        for report in (
+            self.report_north_open,
+            self.report_north_closed,
+            self.report_south_open,
+        ):
+            expected_url = reverse(
+                "report-detail", args=[report_token(report)]
+            )
+            self.assertContains(response, expected_url)

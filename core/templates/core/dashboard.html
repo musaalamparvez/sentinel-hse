@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reports Dashboard</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 1rem;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: #f5f5f5;
+      color: #1a1a1a;
+    }
+    .card {
+      max-width: 960px;
+      margin: 0 auto;
+      background: #fff;
+      border-radius: 8px;
+      padding: 1.5rem;
+    }
+    h1 {
+      font-size: 1.25rem;
+      margin: 0 0 1rem;
+    }
+    form.filters {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: end;
+      gap: 1rem;
+      margin: 0 0 1.5rem;
+    }
+    .field label {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 0.25rem;
+      font-size: 0.9rem;
+    }
+    select {
+      padding: 0.5rem;
+      font-size: 1rem;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      background: #fff;
+    }
+    button, .clear-link {
+      font-size: 1rem;
+      padding: 0.55rem 1rem;
+      border: none;
+      border-radius: 4px;
+      background: #1a1a1a;
+      color: #fff;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-block;
+    }
+    .clear-link {
+      background: #eee;
+      color: #1a1a1a;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.6rem 0.5rem;
+      border-bottom: 1px solid #eee;
+    }
+    th {
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      color: #555;
+    }
+    tr.report-row:hover {
+      background: #fafafa;
+    }
+    tr.report-row a.row-link {
+      color: #1a1a1a;
+      text-decoration: none;
+      display: block;
+    }
+    .status {
+      display: inline-block;
+      padding: 0.2rem 0.6rem;
+      border-radius: 999px;
+      font-weight: 600;
+      font-size: 0.85rem;
+      background: #e0e0e0;
+    }
+    .status-open { background: #fde7c7; }
+    .status-in_progress { background: #cfe3fd; }
+    .status-closed { background: #d6f0d6; }
+    .empty-state {
+      padding: 2rem 0;
+      text-align: center;
+      color: #555;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Reports Dashboard</h1>
+
+    <form class="filters" method="get">
+      <div class="field">
+        <label for="id_site">Site</label>
+        <select id="id_site" name="site">
+          <option value="">All sites</option>
+          {% for site in sites %}
+            <option value="{{ site.pk }}" {% if selected_site_id == site.pk|stringformat:"s" %}selected{% endif %}>
+              {{ site.name }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="id_status">Status</label>
+        <select id="id_status" name="status">
+          <option value="">All statuses</option>
+          {% for value, label in statuses %}
+            <option value="{{ value }}" {% if selected_status == value %}selected{% endif %}>
+              {{ label }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <button type="submit">Apply filters</button>
+      </div>
+      {% if has_filters %}
+        <div class="field">
+          <a class="clear-link" href="{% url 'dashboard' %}">Clear filters</a>
+        </div>
+      {% endif %}
+    </form>
+
+    {% if rows %}
+      <table>
+        <thead>
+          <tr>
+            <th>Site</th>
+            <th>Category</th>
+            <th>Status</th>
+            <th>Reported at</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for report, token in rows %}
+            <tr class="report-row">
+              <td><a class="row-link" href="{% url 'report-detail' token %}">{{ report.site.name }}</a></td>
+              <td><a class="row-link" href="{% url 'report-detail' token %}">{{ report.get_category_display }}</a></td>
+              <td>
+                <a class="row-link" href="{% url 'report-detail' token %}">
+                  <span class="status status-{{ report.status }}">{{ report.get_status_display }}</span>
+                </a>
+              </td>
+              <td><a class="row-link" href="{% url 'report-detail' token %}">{{ report.created_at }}</a></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="empty-state">No reports match the selected filters.</p>
+    {% endif %}
+  </div>
+</body>
+</html>

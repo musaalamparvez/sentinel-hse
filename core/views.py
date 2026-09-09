@@ -7,7 +7,7 @@ from django.utils import timezone
 from core import emails
 from core.access import require_access_code
 from core.models import Assignee, Closure, Report, Site
-from core.tokens import report_pk_from_token
+from core.tokens import report_pk_from_token, report_token
 
 # Status values an assignee is allowed to set from the report detail
 # page (#8). Closed is deliberately excluded — only the closure flow
@@ -307,6 +307,49 @@ def report_close(request, token):
         context,
         status=409 if already_closed else (400 if errors else 200),
     )
+
+
+@require_access_code
+def dashboard(request):
+    """Supervisor/safety officer dashboard (#11): every Report, newest
+    first, filterable by Site and Status via query-string params.
+
+    Gated by the same access-code check as the report detail page
+    (#8/#10). Filters are applied via a plain query-string GET reload
+    (``?site=<id>&status=<value>``) — no JS required for MVP. Either
+    filter may be applied alone or together; an empty ``site``/``status``
+    (or an absent one) means "don't filter on this dimension", so
+    clearing filters is just a link back to the bare dashboard URL.
+    """
+    reports = Report.objects.select_related("site").order_by("-created_at")
+
+    site_id = request.GET.get("site", "").strip()
+    selected_site = None
+    if site_id:
+        try:
+            selected_site = Site.objects.get(pk=site_id)
+        except (Site.DoesNotExist, ValueError, TypeError):
+            selected_site = None
+        else:
+            reports = reports.filter(site=selected_site)
+
+    status = request.GET.get("status", "").strip()
+    if status and status in Report.Status.values:
+        reports = reports.filter(status=status)
+    else:
+        status = ""
+
+    rows = [(report, report_token(report)) for report in reports]
+
+    context = {
+        "rows": rows,
+        "sites": Site.objects.order_by("name"),
+        "statuses": Report.Status.choices,
+        "selected_site_id": str(selected_site.pk) if selected_site else "",
+        "selected_status": status,
+        "has_filters": bool(selected_site or status),
+    }
+    return render(request, "core/dashboard.html", context)
 
 
 def site_assignees(request, site_id):
