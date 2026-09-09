@@ -16,6 +16,9 @@ and QA as subagents. It does not groom, implement or test itself.
 Lifecycle
 
 1. Pick the next open issue from the backlog
+   - If its Constraints section names a hard dependency on another
+     still-open issue (e.g. "depends on #10 being available"), groom
+     and implement that dependency first, out of numeric order
 2. PM grooms it
 3. Engineer implements it
 4. QA verifies it
