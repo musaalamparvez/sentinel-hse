@@ -13,6 +13,7 @@ from django.urls import path, reverse
 
 from core.access import SESSION_KEY, has_valid_session, require_access_code
 from core.models import Assignee, Closure, Report, Site
+from core.tokens import report_pk_from_token, report_token
 
 
 # --- test-only URLconf for the access-code gate tests below (#10) ---
@@ -401,7 +402,7 @@ class SendNewReportNotificationTests(TestCase):
             location="Warehouse B, aisle 3",
         )
 
-    def test_sends_to_assignee_with_placeholder_detail_link(self):
+    def test_sends_to_assignee_with_working_detail_link(self):
         from core.emails import send_new_report_notification
 
         send_new_report_notification(self.report)
@@ -409,9 +410,191 @@ class SendNewReportNotificationTests(TestCase):
         self.assertEqual(len(mail.outbox), 1)
         sent = mail.outbox[0]
         self.assertEqual(sent.to, [self.assignee.email])
-        # #8 (the report detail page) doesn't exist yet, so this falls
-        # back to a guessed path rather than a resolvable reverse().
-        self.assertIn(f"/reports/{self.report.pk}/", sent.body)
+        # #8 now exists: the link resolves via reverse() to the report
+        # detail page, addressed by an unguessable token rather than
+        # the raw sequential Report.id.
+        expected_path = reverse("report-detail", args=[report_token(self.report)])
+        self.assertIn(expected_path, sent.body)
+        self.assertNotIn(f"/reports/{self.report.pk}/", sent.body)
+
+
+class ReportTokenTests(TestCase):
+    """core.tokens: the unguessable identifier (#8) used to link to a
+    report without exposing the sequential Report.id."""
+
+    def setUp(self):
+        self.site = Site.objects.create(name="North Yard")
+        self.assignee = Assignee.objects.create(
+            name="Jane Doe", email="jane@example.com"
+        )
+        self.report = Report.objects.create(
+            site=self.site,
+            assignee=self.assignee,
+            category=Report.Category.EQUIPMENT,
+            description="A guard rail is missing.",
+            location="Warehouse B",
+        )
+
+    def test_token_is_not_the_raw_pk(self):
+        token = report_token(self.report)
+
+        self.assertNotEqual(token, str(self.report.pk))
+
+    def test_token_round_trips_to_the_correct_pk(self):
+        token = report_token(self.report)
+
+        self.assertEqual(report_pk_from_token(token), self.report.pk)
+
+    def test_tampered_token_does_not_resolve(self):
+        token = report_token(self.report)
+        tampered = token[:-1] + ("x" if token[-1] != "x" else "y")
+
+        self.assertIsNone(report_pk_from_token(tampered))
+
+    def test_garbage_token_does_not_resolve(self):
+        self.assertIsNone(report_pk_from_token("not-a-real-token"))
+
+    def test_swapping_the_signed_value_does_not_resolve(self):
+        # Signed as pk=1 but claiming to be a different report's pk
+        # shouldn't be possible by editing the plaintext part alone.
+        token = report_token(self.report)
+        value, _, sig = token.rpartition(":")
+        forged = f"{self.report.pk + 999}:{sig}"
+
+        self.assertIsNone(report_pk_from_token(forged))
+
+
+@override_settings(ACCESS_CODES=["letmein"])
+class ReportDetailViewTests(TestCase):
+    """core.views.report_detail (#8): the assignee-facing report page,
+    reached via an unguessable token and gated by the access code from
+    #10."""
+
+    def setUp(self):
+        self.site = Site.objects.create(name="North Yard")
+        self.assignee = Assignee.objects.create(
+            name="Jane Doe", email="jane@example.com"
+        )
+        self.report = Report.objects.create(
+            site=self.site,
+            assignee=self.assignee,
+            category=Report.Category.OTHER,
+            category_other_detail="Loose scaffolding plank",
+            description="A scaffolding plank looked loose on level 3.",
+            reporter_name="Sam Reporter",
+            is_anonymous=False,
+            location="Warehouse B, aisle 3",
+            status=Report.Status.OPEN,
+        )
+        self.url = reverse("report-detail", args=[report_token(self.report)])
+
+    # --- reachability / gating ---
+
+    def test_unauthenticated_request_shows_access_prompt_not_report(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Access code required")
+        self.assertNotContains(response, self.report.description)
+
+    def test_reachable_with_valid_access_code(self):
+        response = self.client.get(self.url, {"code": "letmein"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, self.report.description)
+
+    def test_access_code_is_remembered_for_later_requests_to_the_page(self):
+        self.client.get(self.url, {"code": "letmein"})
+
+        second = self.client.get(self.url)
+
+        self.assertContains(second, self.report.description)
+
+    def test_invalid_token_is_a_404_once_past_the_gate(self):
+        bogus_url = reverse("report-detail", args=["not-a-real-token"])
+
+        response = self.client.get(bogus_url, {"code": "letmein"})
+
+        self.assertEqual(response.status_code, 404)
+
+    # --- fields shown ---
+
+    def test_shows_report_fields_relevant_to_resolving_it(self):
+        response = self.client.get(self.url, {"code": "letmein"})
+
+        self.assertContains(response, "North Yard")
+        self.assertContains(response, "Loose scaffolding plank")
+        self.assertContains(response, "A scaffolding plank looked loose on level 3.")
+        self.assertContains(response, "Warehouse B, aisle 3")
+        self.assertContains(response, "Open")
+
+    def test_shows_reporter_name_when_not_anonymous(self):
+        response = self.client.get(self.url, {"code": "letmein"})
+
+        self.assertContains(response, "Sam Reporter")
+
+    def test_hides_reporter_name_when_anonymous_even_if_stored(self):
+        # Simulates a future task populating reporter_name despite
+        # is_anonymous=True; the page must never leak it regardless.
+        anon_report = Report.objects.create(
+            site=self.site,
+            assignee=self.assignee,
+            category=Report.Category.OTHER,
+            description="Anonymous near-miss report.",
+            reporter_name="Should Never Appear",
+            is_anonymous=True,
+            location="Warehouse C",
+        )
+        url = reverse("report-detail", args=[report_token(anon_report)])
+
+        response = self.client.get(url, {"code": "letmein"})
+
+        self.assertNotContains(response, "Should Never Appear")
+
+    # --- status transitions ---
+
+    def test_open_to_in_progress_is_allowed(self):
+        self.client.get(self.url, {"code": "letmein"})
+        response = self.client.post(self.url, {"status": "in_progress"})
+
+        self.assertEqual(response.status_code, 302)
+        self.report.refresh_from_db()
+        self.assertEqual(self.report.status, Report.Status.IN_PROGRESS)
+
+    def test_in_progress_back_to_open_is_allowed(self):
+        self.report.status = Report.Status.IN_PROGRESS
+        self.report.save(update_fields=["status"])
+        self.client.get(self.url, {"code": "letmein"})
+
+        response = self.client.post(self.url, {"status": "open"})
+
+        self.assertEqual(response.status_code, 302)
+        self.report.refresh_from_db()
+        self.assertEqual(self.report.status, Report.Status.OPEN)
+
+    def test_tampering_to_closed_is_rejected_server_side(self):
+        self.client.get(self.url, {"code": "letmein"})
+        response = self.client.post(self.url, {"status": "closed"})
+
+        self.assertEqual(response.status_code, 400)
+        self.report.refresh_from_db()
+        self.assertEqual(self.report.status, Report.Status.OPEN)
+
+    def test_bogus_status_value_is_rejected(self):
+        self.client.get(self.url, {"code": "letmein"})
+        response = self.client.post(self.url, {"status": "not-a-status"})
+
+        self.assertEqual(response.status_code, 400)
+        self.report.refresh_from_db()
+        self.assertEqual(self.report.status, Report.Status.OPEN)
+
+    def test_status_update_without_access_code_is_gated_and_ignored(self):
+        response = self.client.post(self.url, {"status": "in_progress"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Access code required")
+        self.report.refresh_from_db()
+        self.assertEqual(self.report.status, Report.Status.OPEN)
 
 
 class SiteModelTests(TestCase):

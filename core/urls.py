@@ -15,4 +15,9 @@ urlpatterns = [
         views.site_assignees,
         name="site-assignees",
     ),
+    path(
+        "reports/<str:token>/",
+        views.report_detail,
+        name="report-detail",
+    ),
 ]

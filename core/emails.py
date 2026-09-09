@@ -10,23 +10,28 @@ from django.conf import settings
 from django.core.mail import send_mail
 from django.urls import NoReverseMatch, reverse
 
+from core.tokens import report_token
+
 logger = logging.getLogger(__name__)
 
 DESCRIPTION_SNIPPET_LENGTH = 200
 
 
 def _report_detail_path(report):
-    """Best-effort link to the report's detail page.
+    """Link to the report's detail page (#8).
 
-    The report detail page (#8) doesn't exist yet, so there's no real
-    URL to link to. Try the URL name it's expected to register
-    ("report-detail") so this starts resolving correctly automatically
-    once #8 adds it; until then, fall back to a plain guessed path.
+    Addressed by an unguessable signed token (core.tokens), not the raw
+    sequential Report.id, per #8's acceptance criteria. Reverse still
+    isn't allowed to blow up report creation if URL config is ever
+    broken, so a NoReverseMatch falls back to a guessed (token-based)
+    path instead of raising — send_new_report_notification's own
+    try/except handles any other failure.
     """
+    token = report_token(report)
     try:
-        return reverse("report-detail", args=[report.pk])
+        return reverse("report-detail", args=[token])
     except NoReverseMatch:
-        return f"/reports/{report.pk}/"
+        return f"/reports/{token}/"
 
 
 def send_new_report_notification(report, request=None):

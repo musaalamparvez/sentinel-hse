@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Report Detail</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 1rem;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: #f5f5f5;
+      color: #1a1a1a;
+    }
+    .card {
+      max-width: 480px;
+      margin: 0 auto;
+      background: #fff;
+      border-radius: 8px;
+      padding: 1.5rem;
+    }
+    h1 {
+      font-size: 1.25rem;
+      margin: 0 0 1rem;
+    }
+    dl {
+      margin: 0 0 1.5rem;
+    }
+    dt {
+      font-weight: 600;
+      margin-top: 0.75rem;
+    }
+    dd {
+      margin: 0.15rem 0 0;
+      color: #333;
+    }
+    .status {
+      display: inline-block;
+      padding: 0.2rem 0.6rem;
+      border-radius: 999px;
+      font-weight: 600;
+      font-size: 0.85rem;
+      background: #e0e0e0;
+    }
+    .status-open { background: #fde7c7; }
+    .status-in_progress { background: #cfe3fd; }
+    .status-closed { background: #d6f0d6; }
+    img.photo {
+      max-width: 100%;
+      border-radius: 4px;
+      margin-top: 0.25rem;
+    }
+    .error {
+      color: #b00020;
+      font-weight: 600;
+    }
+    form.status-form {
+      margin-top: 0.5rem;
+      display: flex;
+      gap: 0.5rem;
+    }
+    button {
+      font-size: 1rem;
+      padding: 0.6rem 1rem;
+      border: none;
+      border-radius: 4px;
+      background: #1a1a1a;
+      color: #fff;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Report #{{ report.pk }}</h1>
+
+    {% if status_error %}
+      <p class="error">That status change isn't allowed from this page.</p>
+    {% endif %}
+
+    <dl>
+      <dt>Status</dt>
+      <dd>
+        <span class="status status-{{ report.status }}">{{ report.get_status_display }}</span>
+      </dd>
+
+      <dt>Site</dt>
+      <dd>{{ report.site.name }}</dd>
+
+      <dt>Category</dt>
+      <dd>
+        {{ report.get_category_display }}
+        {% if report.category_other_detail %}
+          &mdash; {{ report.category_other_detail }}
+        {% endif %}
+      </dd>
+
+      <dt>Description</dt>
+      <dd>{{ report.description }}</dd>
+
+      {% if report.photo %}
+        <dt>Photo</dt>
+        <dd><img class="photo" src="{{ report.photo.url }}" alt="Report photo"></dd>
+      {% endif %}
+
+      <dt>Location</dt>
+      <dd>
+        {{ report.location }}
+        {% if report.location_lat and report.location_lng %}
+          ({{ report.location_lat }}, {{ report.location_lng }})
+        {% endif %}
+      </dd>
+
+      {% if not report.is_anonymous and report.reporter_name %}
+        <dt>Reported by</dt>
+        <dd>{{ report.reporter_name }}</dd>
+      {% endif %}
+
+      <dt>Reported at</dt>
+      <dd>{{ report.created_at }}</dd>
+    </dl>
+
+    {% if report.status == "open" %}
+      <form class="status-form" method="post">
+        {% csrf_token %}
+        <input type="hidden" name="status" value="in_progress">
+        <button type="submit">Mark In Progress</button>
+      </form>
+    {% elif report.status == "in_progress" %}
+      <form class="status-form" method="post">
+        {% csrf_token %}
+        <input type="hidden" name="status" value="open">
+        <button type="submit">Reopen</button>
+      </form>
+    {% endif %}
+  </div>
+</body>
+</html>

@@ -1,9 +1,16 @@
 from django.core.files.uploadedfile import UploadedFile
-from django.http import JsonResponse
+from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 
 from core import emails
+from core.access import require_access_code
 from core.models import Assignee, Report, Site
+from core.tokens import report_pk_from_token
+
+# Status values an assignee is allowed to set from the report detail
+# page (#8). Closed is deliberately excluded — only the closure flow
+# (#9) may set status=Closed.
+ASSIGNEE_SETTABLE_STATUSES = {Report.Status.OPEN, Report.Status.IN_PROGRESS}
 
 MAX_PHOTO_BYTES = 10 * 1024 * 1024  # 10MB
 ALLOWED_PHOTO_CONTENT_TYPES = {"image/jpeg", "image/png"}
@@ -188,6 +195,46 @@ def report_confirmation(request):
     deanonymize an anonymous submission (e.g. via a shared/guessed URL).
     """
     return render(request, "core/report_confirmation.html")
+
+
+@require_access_code
+def report_detail(request, token):
+    """Assignee-facing report detail page (#8).
+
+    Reached via an unguessable signed token (core.tokens), not the raw
+    Report.id, and gated by the same access-code check as the
+    dashboard (#10) via @require_access_code. Lets the assignee move
+    status between Open and In Progress in either direction; tampering
+    with the posted status to anything else (in particular "closed",
+    which only #9's closure flow may set) is rejected server-side and
+    never changes the stored status.
+    """
+    pk = report_pk_from_token(token)
+    if pk is None:
+        raise Http404("Invalid or tampered report link.")
+    report = get_object_or_404(Report, pk=pk)
+
+    status_error = False
+    if request.method == "POST":
+        submitted_status = request.POST.get("status", "")
+        if submitted_status not in ASSIGNEE_SETTABLE_STATUSES:
+            status_error = True
+        else:
+            if report.status != submitted_status:
+                report.status = submitted_status
+                report.save(update_fields=["status"])
+            return redirect("report-detail", token=token)
+
+    context = {
+        "report": report,
+        "status_error": status_error,
+    }
+    return render(
+        request,
+        "core/report_detail.html",
+        context,
+        status=400 if status_error else 200,
+    )
 
 
 def site_assignees(request, site_id):
