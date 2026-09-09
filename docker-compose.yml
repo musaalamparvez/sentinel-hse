@@ -1,0 +1,14 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: hse_tool
+      POSTGRES_USER: hse_tool
+      POSTGRES_PASSWORD: hse_tool
+    ports:
+      - "5432:5432"
+    volumes:
+      - hse_tool_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  hse_tool_postgres_data:

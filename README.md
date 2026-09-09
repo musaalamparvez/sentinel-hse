@@ -5,11 +5,10 @@ Django + Postgres monolith. See `_docs/plan.md` for the product spec and
 
 ## Local development setup
 
-1. Create a virtualenv and install dependencies:
+1. Install dependencies (requires [uv](https://docs.astral.sh/uv/)):
 
    ```bash
-   python3 -m venv .venv
-   .venv/bin/pip install -r requirements.txt
+   uv sync
    ```
 
 2. Start Postgres via Docker Compose:
@@ -24,16 +23,19 @@ Django + Postgres monolith. See `_docs/plan.md` for the product spec and
    cp .env.example .env
    ```
 
+   `DATABASE_URL` defaults to matching the `docker-compose.yml` Postgres
+   service, so the default values work out of the box.
+
 4. Run migrations:
 
    ```bash
-   .venv/bin/python manage.py migrate
+   uv run python manage.py migrate
    ```
 
 5. Run the dev server:
 
    ```bash
-   .venv/bin/python manage.py runserver
+   uv run python manage.py runserver
    ```
 
    The app will be available at http://127.0.0.1:8000/, with a health-check
@@ -42,11 +44,14 @@ Django + Postgres monolith. See `_docs/plan.md` for the product spec and
 ## Running tests
 
 ```bash
-.venv/bin/python manage.py test
+uv run pytest
+```
+
+or, equivalently:
+
+```bash
+uv run python manage.py test
 ```
 
 Tests run against a temporary Postgres test database created/destroyed
-automatically by Django's test runner using the same `DATABASE_URL`.
-
-If Postgres isn't running, unset `DATABASE_URL` (or omit `.env`) to fall back
-to a local SQLite database for quick checks.
+automatically by Django's test runner, using the same `DATABASE_URL`.
