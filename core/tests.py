@@ -1,5 +1,8 @@
+from unittest.mock import patch
+
 from django.contrib.admin.sites import site as admin_site
 from django.contrib.auth import get_user_model
+from django.core import mail
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError, transaction
@@ -279,6 +282,39 @@ class ReportSubmissionTests(TestCase):
         self.assertIsNone(report.location_lat)
         self.assertIsNone(report.location_lng)
 
+    def test_valid_submission_emails_the_assignee_exactly_once(self):
+        response = self.client.post(reverse("report-form"), self._valid_data())
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(len(mail.outbox), 1)
+        sent = mail.outbox[0]
+        self.assertEqual(sent.to, [self.assignee.email])
+
+    def test_notification_email_includes_site_category_and_description(self):
+        self.client.post(reverse("report-form"), self._valid_data())
+
+        sent = mail.outbox[0]
+        self.assertIn(self.site.name, sent.body)
+        self.assertIn("Slip/Trip/Fall", sent.body)
+        self.assertIn("forklift nearly collided", sent.body)
+
+    def test_invalid_submission_sends_no_email(self):
+        response = self.client.post(reverse("report-form"), self._valid_data(site=""))
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_email_send_failure_does_not_block_report_creation_or_confirmation(self):
+        with patch("core.emails.send_mail", side_effect=RuntimeError("smtp down")):
+            response = self.client.post(reverse("report-form"), self._valid_data())
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], reverse("report-confirmation"))
+        self.assertEqual(Report.objects.count(), 1)
+
+        confirmation = self.client.get(reverse("report-confirmation"))
+        self.assertEqual(confirmation.status_code, 200)
+
 
 class SiteAssigneesEndpointTests(TestCase):
     def test_returns_only_assignees_linked_to_the_site(self):
@@ -321,6 +357,33 @@ class SiteAssigneesEndpointTests(TestCase):
         )
 
         self.assertNotEqual(response.status_code, 302)
+
+
+class SendNewReportNotificationTests(TestCase):
+    def setUp(self):
+        self.site = Site.objects.create(name="North Yard")
+        self.assignee = Assignee.objects.create(
+            name="Jane Doe", email="jane@example.com"
+        )
+        self.report = Report.objects.create(
+            site=self.site,
+            assignee=self.assignee,
+            category=Report.Category.SLIP_TRIP_FALL,
+            description="A forklift nearly collided with a pedestrian.",
+            location="Warehouse B, aisle 3",
+        )
+
+    def test_sends_to_assignee_with_placeholder_detail_link(self):
+        from core.emails import send_new_report_notification
+
+        send_new_report_notification(self.report)
+
+        self.assertEqual(len(mail.outbox), 1)
+        sent = mail.outbox[0]
+        self.assertEqual(sent.to, [self.assignee.email])
+        # #8 (the report detail page) doesn't exist yet, so this falls
+        # back to a guessed path rather than a resolvable reverse().
+        self.assertIn(f"/reports/{self.report.pk}/", sent.body)
 
 
 class SiteModelTests(TestCase):

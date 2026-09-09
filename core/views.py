@@ -2,6 +2,7 @@ from django.core.files.uploadedfile import UploadedFile
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 
+from core import emails
 from core.models import Assignee, Report, Site
 
 MAX_PHOTO_BYTES = 10 * 1024 * 1024  # 10MB
@@ -142,7 +143,7 @@ def report_form(request):
         cleaned, errors = _validate_report_submission(request)
 
         if not errors:
-            Report.objects.create(
+            report = Report.objects.create(
                 site=cleaned["site"],
                 assignee=cleaned["assignee"],
                 category=cleaned["category"],
@@ -156,6 +157,7 @@ def report_form(request):
                 location_lng=cleaned["location_lng"],
                 status=Report.Status.OPEN,
             )
+            emails.send_new_report_notification(report, request)
             return redirect("report-confirmation")
 
         context = {

@@ -156,9 +156,40 @@ MEDIA_ROOT = BASE_DIR / "media"
 
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
+#
+# Django 6.1's MAILERS setting (replacing the older EMAIL_* settings,
+# which this Django version soft-deprecates) configures the "default"
+# mailer. Local dev defaults to the console backend so nothing is ever
+# sent externally. Production sets DJANGO_EMAIL_BACKEND to the SMTP
+# backend and the other DJANGO_EMAIL_* vars for a plain SMTP account
+# (see #7) — no credentials are committed here.
+
+_EMAIL_BACKEND = os.environ.get(
+    "DJANGO_EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend"
+)
+
+# The SMTP backend accepts host/port/username/password/use_tls OPTIONS;
+# other backends (console, locmem, filebased...) reject unknown options,
+# so only pass them through when SMTP is actually selected.
+_EMAIL_OPTIONS = (
+    {
+        "host": os.environ.get("DJANGO_EMAIL_HOST", ""),
+        "port": int(os.environ.get("DJANGO_EMAIL_PORT", "587")),
+        "username": os.environ.get("DJANGO_EMAIL_HOST_USER", ""),
+        "password": os.environ.get("DJANGO_EMAIL_HOST_PASSWORD", ""),
+        "use_tls": os.environ.get("DJANGO_EMAIL_USE_TLS", "True") == "True",
+    }
+    if _EMAIL_BACKEND == "django.core.mail.backends.smtp.EmailBackend"
+    else {}
+)
 
 MAILERS = {
     "default": {
-        "BACKEND": "django.core.mail.backends.console.EmailBackend",
+        "BACKEND": _EMAIL_BACKEND,
+        "OPTIONS": _EMAIL_OPTIONS,
     },
 }
+
+DEFAULT_FROM_EMAIL = os.environ.get(
+    "DJANGO_DEFAULT_FROM_EMAIL", "hse-tool@example.com"
+)
