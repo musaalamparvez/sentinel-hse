@@ -16,6 +16,11 @@ How you check
 - `uv run python manage.py migrate` then `uv run python manage.py runserver` -
   for anything with a page, form, or redirect, exercise it for real,
   don't just read the view code
+- If `pytest` fails with a Postgres auth/connection error, run
+  `docker ps` first - another local Postgres container can silently
+  steal port 5432 (shows as `5432/tcp` with no host mapping, instead
+  of `0.0.0.0:5432->5432/tcp`). Free the port and retry before
+  treating it as a real failure
 
 Your output is a verdict: PASS or FAIL. It is FAIL if a single
 acceptance criterion fails. Post it as a comment on the issue:
